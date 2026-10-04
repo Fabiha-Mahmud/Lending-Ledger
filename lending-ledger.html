@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lending Ledger</title>
+<style>
+:root{--bg:#e6ebf5;--paper:#fbfcff;--ink:#1b2447;--mute:#66709a;--rule:#cdd5ec;--blue:#2f3f9e;--stamp:#c2271d;--ok:#1d7a4d;--soon:#a8620a}
+@media(prefers-color-scheme:dark){:root{--bg:#10142a;--paper:#192040;--ink:#e6eaff;--mute:#97a1d0;--rule:#2d3769;--blue:#9db0ff;--stamp:#ff7a6e;--ok:#5fd39b;--soon:#ffb454}}
+*{box-sizing:border-box}
+body{margin:0;padding:20px;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}
+.wrap{max-width:860px;margin:0 auto}
+h1{margin:0;font:700 30px/1.1 'Courier New',Courier,monospace;letter-spacing:-.5px}
+.sub{color:var(--mute);margin:4px 0 16px}
+.stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px}
+.stat{flex:1;min-width:120px;background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:8px 12px}
+.stat b{display:block;font:700 24px/1.2 'Courier New',monospace}
+.stat span{color:var(--mute);font-size:13px}
+form{display:grid;grid-template-columns:1.4fr 1fr 1fr 1fr auto;gap:8px;background:var(--paper);border:1px solid var(--rule);border-radius:4px;padding:12px;margin-bottom:16px}
+input,button{font:inherit;color:var(--ink);background:var(--bg);border:1px solid var(--rule);border-radius:4px;padding:7px 9px;min-width:0}
+form button{background:var(--blue);color:var(--paper);border-color:var(--blue);cursor:pointer}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.bar{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:10px;align-items:center}
+.bar button{cursor:pointer}
+.bar button[aria-pressed=true]{background:var(--blue);color:var(--paper);border-color:var(--blue)}
+.bar input{flex:1;min-width:140px}
+.sheet{background:var(--paper);border:1px solid var(--rule);border-radius:4px;background-image:repeating-linear-gradient(transparent 0 71px,var(--rule) 71px 72px)}
+.entry{display:grid;grid-template-columns:1fr auto;gap:8px;padding:12px 14px;min-height:72px;position:relative}
+.entry h3{margin:0;font:700 17px/1.3 'Courier New',monospace}
+.meta{color:var(--mute);font-size:13px}
+.acts{display:flex;gap:6px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.acts button{cursor:pointer;font-size:13px;padding:4px 9px}
+.stamp{font:700 13px 'Courier New',monospace;border:2px solid;border-radius:3px;padding:1px 7px;transform:rotate(-3deg);display:inline-block}
+.s-over{color:var(--stamp)}.s-soon{color:var(--soon)}.s-out{color:var(--blue)}.s-back{color:var(--ok)}
+.entry.back h3{text-decoration:line-through;opacity:.6}
+.empty{padding:34px;text-align:center;color:var(--mute)}
+.foot{margin-top:12px;display:flex;gap:6px;justify-content:flex-end}
+.foot button{cursor:pointer}
+@media(max-width:700px){form{grid-template-columns:1fr 1fr}form input:first-child{grid-column:1/-1}.entry{grid-template-columns:1fr}.acts{justify-content:flex-start}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Lending Ledger</h1>
+  <p class="sub">Track what you lent, who has it, and when it should come back.</p>
+
+  <div class="stats">
+    <div class="stat"><b id="a">0</b><span>Out now</span></div>
+    <div class="stat"><b id="b">0</b><span>Overdue</span></div>
+    <div class="stat"><b id="c">0</b><span>Due within 3 days</span></div>
+    <div class="stat"><b id="d">0</b><span>Returned, all time</span></div>
+  </div>
+
+  <form id="f">
+    <input id="item" placeholder="Item (e.g. drill, novel)" required aria-label="Item">
+    <input id="who" placeholder="Lent to" required aria-label="Borrower">
+    <input id="lent" type="date" required aria-label="Date lent">
+    <input id="due" type="date" required aria-label="Due date">
+    <button>Log loan</button>
+  </form>
+
+  <div class="bar">
+    <button data-f="open" aria-pressed="true">Out</button>
+    <button data-f="over" aria-pressed="false">Overdue</button>
+    <button data-f="back" aria-pressed="false">Returned</button>
+    <button data-f="all" aria-pressed="false">All</button>
+    <input id="q" type="search" placeholder="Search item or person" aria-label="Search">
+  </div>
+
+  <div class="sheet" id="list"></div>
+  <div class="foot"><button id="csv">Export CSV</button><button id="clr">Clear returned</button></div>
+</div>
+
+<script>
+const KEY='lending-ledger-v1';
+let loans=[],filter='open';
+try{loans=JSON.parse(localStorage.getItem(KEY))||[]}catch(e){loans=[]}
+const save=()=>{try{localStorage.setItem(KEY,JSON.stringify(loans))}catch(e){}};
+const $=id=>document.getElementById(id);
+const iso=d=>{const x=new Date(d);return x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0')};
+const today=()=>iso(new Date());
+const diff=d=>{const a=new Date(today()+'T00:00:00'),b=new Date(d+'T00:00:00');return Math.round((b-a)/864e5)};
+const plus=(d,n)=>{const x=new Date(d+'T00:00:00');x.setDate(x.getDate()+n);return iso(x)};
+const el=(t,c,x)=>{const e=document.createElement(t);if(c)e.className=c;if(x!==undefined)e.textContent=x;return e};
+
+$('lent').value=today();$('due').value=plus(today(),14);
+
+function status(l){
+  if(l.returned)return['back','Returned'];
+  const n=diff(l.due);
+  if(n<0)return['over','Overdue '+Math.abs(n)+'d'];
+  if(n<=3)return['soon',n===0?'Due today':'Due in '+n+'d'];
+  return['out','Due in '+n+'d'];
+}
+
+function render(){
+  const q=$('q').value.toLowerCase().trim();
+  const rows=loans.filter(l=>{
+    const k=status(l)[0];
+    if(filter==='open'&&l.returned)return false;
+    if(filter==='over'&&k!=='over')return false;
+    if(filter==='back'&&!l.returned)return false;
+    return !q||(l.item+' '+l.who).toLowerCase().includes(q);
+  }).sort((a,b)=>a.returned-b.returned||a.due.localeCompare(b.due));
+
+  const list=$('list');list.replaceChildren();
+  if(!rows.length)list.appendChild(el('div','empty','Nothing here. Log a loan above to start the ledger.'));
+  rows.forEach(l=>{
+    const [k,txt]=status(l);
+    const e=el('div','entry'+(l.returned?' back':''));
+    const left=el('div');
+    left.appendChild(el('h3','',l.item));
+    left.appendChild(el('div','meta','With '+l.who+', lent '+l.lent+', due '+l.due));
+    const acts=el('div','acts');
+    acts.appendChild(el('span','stamp s-'+k,txt));
+    if(!l.returned){
+      const r=el('button','','Mark returned');r.onclick=()=>{l.returned=today();save();render()};
+      const x=el('button','','+7 days');x.onclick=()=>{l.due=plus(l.due,7);save();render()};
+      acts.append(r,x);
+    }
+    const d=el('button','','Delete');d.onclick=()=>{if(confirm('Delete this entry?')){loans=loans.filter(z=>z!==l);save();render()}};
+    acts.appendChild(d);
+    e.append(left,acts);list.appendChild(e);
+  });
+
+  const out=loans.filter(l=>!l.returned);
+  $('a').textContent=out.length;
+  $('b').textContent=out.filter(l=>diff(l.due)<0).length;
+  $('c').textContent=out.filter(l=>{const n=diff(l.due);return n>=0&&n<=3}).length;
+  $('d').textContent=loans.length-out.length;
+}
+
+$('f').addEventListener('submit',e=>{
+  e.preventDefault();
+  if($('due').value<$('lent').value){alert('The due date must be on or after the date lent.');return}
+  loans.push({id:Date.now(),item:$('item').value.trim(),who:$('who').value.trim(),lent:$('lent').value,due:$('due').value,returned:''});
+  save();render();
+  $('item').value='';$('who').value='';$('item').focus();
+});
+
+document.querySelectorAll('.bar [data-f]').forEach(b=>b.onclick=()=>{
+  filter=b.dataset.f;
+  document.querySelectorAll('.bar [data-f]').forEach(x=>x.setAttribute('aria-pressed',x===b));
+  render();
+});
+$('q').oninput=render;
+
+$('clr').onclick=()=>{
+  if(loans.some(l=>l.returned)&&confirm('Remove all returned entries?')){loans=loans.filter(l=>!l.returned);save();render()}
+};
+$('csv').onclick=()=>{
+  const esc=s=>'"'+String(s).replace(/"/g,'""')+'"';
+  const rows=[['Item','Borrower','Lent','Due','Returned']].concat(loans.map(l=>[l.item,l.who,l.lent,l.due,l.returned]));
+  const a=document.createElement('a');
+  a.href=URL.createObjectURL(new Blob([rows.map(r=>r.map(esc).join(',')).join('\n')],{type:'text/csv'}));
+  a.download='lending-ledger.csv';a.click();URL.revokeObjectURL(a.href);
+};
+render();
+</script>
+</body>
+</html>
